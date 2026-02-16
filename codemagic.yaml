@@ -252,7 +252,8 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
-      - *.xcarchive
+      - "*.xcarchive"
+      - "*.ipa"
     
     publishing:
       app_store_connect:
