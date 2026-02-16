@@ -30,24 +30,60 @@ workflows:
           echo "Setting version to: $NEW_VERSION"
           echo "Setting build to: $NEW_BUILD"
           
-          # Обновляем через agvtool
-          agvtool new-marketing-version "$NEW_VERSION"
-          agvtool new-version -all "$NEW_BUILD"
-          
-          # Дополнительно обновляем Info.plist
-          find . -name "Info.plist" -type f | while read PLIST; do
+          # Обновляем напрямую через PlistBuddy (более надежный способ)
+          echo "Updating Info.plist files..."
+          find "$CM_BUILD_DIR/Bsports" -name "Info.plist" -type f | while read PLIST; do
             echo "Updating: $PLIST"
-            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEW_VERSION" "$PLIST" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" "$PLIST" 2>/dev/null || true
+            # Устанавливаем версию и билд
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEW_VERSION" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $NEW_VERSION" "$PLIST" 2>/dev/null
+            
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $NEW_BUILD" "$PLIST" 2>/dev/null
+            
+            # Проверяем
+            VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" 2>/dev/null)
+            BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null)
+            echo "  -> Version: $VERSION, Build: $BUILD"
           done
           
+          # Обновляем project.pbxproj
+          echo "Updating project.pbxproj files..."
+          find "$CM_BUILD_DIR/Bsports" -name "project.pbxproj" -type f | while read PBXPROJ; do
+            echo "Found: $PBXPROJ"
+            # Создаем бэкап
+            cp "$PBXPROJ" "${PBXPROJ}.backup"
+            # Обновляем MARKETING_VERSION и CURRENT_PROJECT_VERSION
+            sed -i '' "s/MARKETING_VERSION = [0-9.]*;/MARKETING_VERSION = $NEW_VERSION;/g" "$PBXPROJ" 2>/dev/null || true
+            sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9.]*;/CURRENT_PROJECT_VERSION = $NEW_BUILD;/g" "$PBXPROJ" 2>/dev/null || true
+            echo "  Updated project settings"
+          done
+          
+          # Пробуем использовать agvtool с указанием проекта
+          echo "Trying agvtool with specific project..."
+          cd "$CM_BUILD_DIR/Bsports"
+          if [ -f "Bsports.xcodeproj/project.pbxproj" ]; then
+            # Создаем временный файл с настройками для agvtool
+            echo "Project found, using agvtool..."
+            agvtool new-marketing-version "$NEW_VERSION" -project Bsports.xcodeproj 2>/dev/null || true
+            agvtool new-version -all "$NEW_BUILD" -project Bsports.xcodeproj 2>/dev/null || true
+          fi
+          
           echo "=== VERIFICATION ==="
-          agvtool what-marketing-version
-          agvtool what-version
+          # Проверяем финальные значения
+          FIRST_PLIST=$(find "$CM_BUILD_DIR/Bsports" -name "Info.plist" -type f | head -1)
+          if [ -f "$FIRST_PLIST" ]; then
+            FINAL_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$FIRST_PLIST" 2>/dev/null)
+            FINAL_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$FIRST_PLIST" 2>/dev/null)
+            echo "Final version in Info.plist: $FINAL_VERSION ($FINAL_BUILD)"
+          else
+            echo "No Info.plist found for verification"
+          fi
       
       - name: Build IPA
         script: |
           cd $CM_BUILD_DIR/Bsports
+          echo "Building IPA with version $NEW_VERSION ($NEW_BUILD)"
           xcode-project build-ipa \
             --project "Bsports.xcodeproj" \
             --scheme "$XCODE_SCHEME"
@@ -83,8 +119,7 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - "*.ipa"
-
     publishing:
       app_store_connect:
         auth: integration
-        submit_to_testflight: true
+        submit_to_testflight: true  # Если хотите отправлять в TestFlight сразу
