@@ -81,7 +81,7 @@ workflows:
           for CONFIG in Debug Release; do
             echo "Updating $CONFIG configuration..."
             xcodebuild \
-              -project "RoadCost.xcodeproj" \
+              -project "Bsports.xcodeproj" \
               -scheme "$XCODE_SCHEME" \
               -configuration $CONFIG \
               MARKETING_VERSION="$NEW_VERSION" \
@@ -109,7 +109,7 @@ workflows:
           fi
           
           echo "2. From xcodebuild settings:"
-          xcodebuild -project "RoadCost.xcodeproj" \
+          xcodebuild -project "Bsports.xcodeproj" \
             -scheme "$XCODE_SCHEME" \
             -configuration Release \
             -showBuildSettings 2>/dev/null | grep -E "VERSION|BUILD" | head -10 || echo "  No build settings found"
@@ -128,7 +128,7 @@ workflows:
           
           # Собираем с явным указанием версий
           xcode-project build-ipa \
-            --project "RoadCost.xcodeproj" \
+            --project "Bsports.xcodeproj" \
             --scheme "$XCODE_SCHEME"
           
           # Проверяем что собралось
