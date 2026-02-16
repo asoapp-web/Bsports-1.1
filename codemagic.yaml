@@ -78,16 +78,42 @@ workflows:
           
           # 4. ОБНОВЛЯЕМ ЧЕРЕЗ XCODEBUILD С ПРИНУДИТЕЛЬНЫМИ НАСТРОЙКАМИ
           echo "=== Force update via xcodebuild ==="
-          for CONFIG in Debug Release; do
-            echo "Updating $CONFIG configuration..."
-            xcodebuild \
-              -project "Bsports.xcodeproj" \
-              -scheme "$XCODE_SCHEME" \
-              -configuration $CONFIG \
-              MARKETING_VERSION="$NEW_VERSION" \
-              CURRENT_PROJECT_VERSION="$NEW_BUILD" \
-              clean 2>&1 | tail -5 || echo "  xcodebuild completed for $CONFIG"
-          done
+          
+          # Находим правильный проект или workspace
+          PROJECT_FILE=$(find . -name "*.xcodeproj" -type d | head -1)
+          WORKSPACE_FILE=$(find . -name "*.xcworkspace" -type d | head -1)
+          
+          if [ -n "$WORKSPACE_FILE" ] && [ "$WORKSPACE_FILE" != "./Pods.xcworkspace" ]; then
+            WORKSPACE_PATH=${WORKSPACE_FILE#./}
+            echo "Using workspace: $WORKSPACE_PATH"
+            
+            for CONFIG in Debug Release; do
+              echo "Updating $CONFIG configuration..."
+              xcodebuild \
+                -workspace "$WORKSPACE_PATH" \
+                -scheme "$XCODE_SCHEME" \
+                -configuration $CONFIG \
+                MARKETING_VERSION="$NEW_VERSION" \
+                CURRENT_PROJECT_VERSION="$NEW_BUILD" \
+                clean 2>&1 | tail -5 || echo "  xcodebuild completed for $CONFIG"
+            done
+          elif [ -n "$PROJECT_FILE" ]; then
+            PROJECT_PATH=${PROJECT_FILE#./}
+            echo "Using project: $PROJECT_PATH"
+            
+            for CONFIG in Debug Release; do
+              echo "Updating $CONFIG configuration..."
+              xcodebuild \
+                -project "$PROJECT_PATH" \
+                -scheme "$XCODE_SCHEME" \
+                -configuration $CONFIG \
+                MARKETING_VERSION="$NEW_VERSION" \
+                CURRENT_PROJECT_VERSION="$NEW_BUILD" \
+                clean 2>&1 | tail -5 || echo "  xcodebuild completed for $CONFIG"
+            done
+          else
+            echo "ERROR: No Xcode project or workspace found!"
+          fi
           
           # 5. ПРОВЕРКА ЧЕРЕЗ AGVTOOL
           echo "=== Checking with agvtool ==="
@@ -109,10 +135,17 @@ workflows:
           fi
           
           echo "2. From xcodebuild settings:"
-          xcodebuild -project "Bsports.xcodeproj" \
-            -scheme "$XCODE_SCHEME" \
-            -configuration Release \
-            -showBuildSettings 2>/dev/null | grep -E "VERSION|BUILD" | head -10 || echo "  No build settings found"
+          if [ -n "$WORKSPACE_PATH" ]; then
+            xcodebuild -workspace "$WORKSPACE_PATH" \
+              -scheme "$XCODE_SCHEME" \
+              -configuration Release \
+              -showBuildSettings 2>/dev/null | grep -E "VERSION|BUILD" | head -10 || echo "  No build settings found"
+          elif [ -n "$PROJECT_PATH" ]; then
+            xcodebuild -project "$PROJECT_PATH" \
+              -scheme "$XCODE_SCHEME" \
+              -configuration Release \
+              -showBuildSettings 2>/dev/null | grep -E "VERSION|BUILD" | head -10 || echo "  No build settings found"
+          fi
           
           echo "=== SUMMARY ==="
           echo "Expected in final IPA:"
@@ -126,17 +159,70 @@ workflows:
           echo "  Version: $NEW_VERSION"
           echo "  Build: $NEW_BUILD"
           
-          # Собираем с явным указанием версий
-          xcode-project build-ipa \
-            --project "Bsports.xcodeproj" \
-            --scheme "$XCODE_SCHEME"
+          cd $CM_BUILD_DIR
+          
+          # Ищем файл проекта или workspace
+          PROJECT_FILE=$(find . -name "*.xcodeproj" -type d | head -1)
+          WORKSPACE_FILE=$(find . -name "*.xcworkspace" -type d | head -1)
+          
+          # Выводим информацию о найденных файлах
+          echo "=== SEARCHING FOR PROJECT FILES ==="
+          echo "Current directory: $(pwd)"
+          echo "Contents:"
+          ls -la
+          
+          echo "Project files found:"
+          find . -name "*.xcodeproj" -type d
+          
+          echo "Workspace files found:"
+          find . -name "*.xcworkspace" -type d
+          
+          # Собираем IPA
+          if [ -n "$WORKSPACE_FILE" ] && [ "$WORKSPACE_FILE" != "./Pods.xcworkspace" ]; then
+            # Убираем ./ из начала пути
+            WORKSPACE_PATH=${WORKSPACE_FILE#./}
+            echo "Found workspace: $WORKSPACE_PATH"
+            
+            # Собираем с workspace
+            echo "Building with workspace: $WORKSPACE_PATH"
+            xcode-project build-ipa \
+              --workspace "$WORKSPACE_PATH" \
+              --scheme "$XCODE_SCHEME"
+              
+          elif [ -n "$PROJECT_FILE" ]; then
+            # Убираем ./ из начала пути
+            PROJECT_PATH=${PROJECT_FILE#./}
+            echo "Found project: $PROJECT_PATH"
+            
+            # Собираем с project
+            echo "Building with project: $PROJECT_PATH"
+            xcode-project build-ipa \
+              --project "$PROJECT_PATH" \
+              --scheme "$XCODE_SCHEME"
+          else
+            echo "ERROR: No Xcode project or workspace found!"
+            echo "Searching in current directory:"
+            ls -la
+            echo "Searching in parent directory:"
+            ls -la ..
+            exit 1
+          fi
           
           # Проверяем что собралось
           echo "=== CHECKING GENERATED IPA ==="
-          IPA_FILE=$(find build/ios/ipa -name "*.ipa" -type f | head -1)
+          
+          # Создаем директорию если её нет
+          mkdir -p build/ios/ipa
+          
+          # Ищем IPA в разных возможных местах
+          IPA_FILE=$(find "$CM_BUILD_DIR" -name "*.ipa" -type f | head -1)
+          
           if [ -f "$IPA_FILE" ]; then
             echo "IPA created: $IPA_FILE"
             echo "Size: $(du -h "$IPA_FILE" | cut -f1)"
+            
+            # Копируем в ожидаемую директорию для артефактов
+            cp "$IPA_FILE" build/ios/ipa/ || true
             
             # Пытаемся получить информацию из IPA
             echo "Extracting info from IPA..."
@@ -153,14 +239,22 @@ workflows:
             rm -rf "$TEMP_DIR"
           else
             echo "ERROR: No IPA file found!"
-            find build -type f -name "*.ipa" 2>/dev/null || echo "No IPA files in build directory"
+            echo "Searching for IPA files:"
+            find "$CM_BUILD_DIR" -type f -name "*.ipa" 2>/dev/null || echo "No IPA files found"
+            
+            # Проверяем директорию build
+            if [ -d "build" ]; then
+              echo "Contents of build directory:"
+              find build -type f -name "*.ipa" 2>/dev/null || echo "No IPA files in build directory"
+            fi
           fi
     
     artifacts:
       - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - *.xcarchive
     
     publishing:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
-  
