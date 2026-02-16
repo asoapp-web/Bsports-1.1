@@ -13,113 +13,153 @@ workflows:
         BUNDLE_ID: "com.Bsports"
         XCODE_SCHEME: "Bsports"
         APP_STORE_APPLE_ID: 6758951311
-        NEW_VERSION: "1.1"
-        NEW_BUILD: "2"
+      # Жестко задаем новые версии
+        NEW_VERSION: "1.1"  # Укажите нужную версию
+        NEW_BUILD: "2"      # Укажите нужный билд-номер
       xcode: latest
     scripts:
-      - name: Set up provisioning profiles
-        script: |
-          cd $CM_BUILD_DIR/Bsports
-          xcode-project use-profiles
+      - name: Set up provisioning profiles settings on Xcode project
+        script: xcode-project use-profiles
       
-      - name: Update version and build numbers
+      - name: RADICALLY UPDATE ALL VERSIONS
         script: |
-          cd $CM_BUILD_DIR/Bsports
-          
-          echo "=== UPDATING VERSION ==="
+          cd $CM_BUILD_DIR
+          echo "=== RADICAL VERSION UPDATE ==="
           echo "Setting version to: $NEW_VERSION"
           echo "Setting build to: $NEW_BUILD"
           
-          # Обновляем напрямую через PlistBuddy (более надежный способ)
-          echo "Updating Info.plist files..."
-          find "$CM_BUILD_DIR/Bsports" -name "Info.plist" -type f | while read PLIST; do
-            echo "Updating: $PLIST"
-            # Устанавливаем версию и билд
-            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEW_VERSION" "$PLIST" 2>/dev/null || \
-            /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $NEW_VERSION" "$PLIST" 2>/dev/null
+          # 1. НАЙДЕМ ВСЕ ВОЗМОЖНЫЕ ФАЙЛЫ С ВЕРСИЯМИ
+          echo "=== Searching for version files ==="
+          find . -type f \( -name "*.plist" -o -name "*.pbxproj" -o -name "*.xcconfig" \) | head -20
+          
+          # 2. ОБНОВЛЯЕМ ВСЕ Info.plist ФАЙЛЫ
+          echo "=== Updating ALL Info.plist files ==="
+          find . -name "Info.plist" -type f | while read PLIST; do
+            echo "Processing: $PLIST"
             
-            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" "$PLIST" 2>/dev/null || \
-            /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $NEW_BUILD" "$PLIST" 2>/dev/null
-            
-            # Проверяем
-            VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" 2>/dev/null)
-            BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null)
-            echo "  -> Version: $VERSION, Build: $BUILD"
+            # Проверяем что файл существует и доступен
+            if [ -f "$PLIST" ]; then
+              # Получаем текущие значения
+              CURRENT_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" 2>/dev/null || echo "NOT_FOUND")
+              CURRENT_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null || echo "NOT_FOUND")
+              echo "  Current: version=$CURRENT_VERSION, build=$CURRENT_BUILD"
+              
+              # Устанавливаем новые значения
+              /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEW_VERSION" "$PLIST" 2>/dev/null && echo "  ✓ Set version to $NEW_VERSION" || echo "  ✗ Failed to set version"
+              /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" "$PLIST" 2>/dev/null && echo "  ✓ Set build to $NEW_BUILD" || echo "  ✗ Failed to set build"
+              
+              # Проверяем
+              CHECK_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" 2>/dev/null || echo "ERROR")
+              CHECK_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null || echo "ERROR")
+              echo "  Updated: version=$CHECK_VERSION, build=$CHECK_BUILD"
+            else
+              echo "  ✗ File not found or not accessible"
+            fi
+            echo "  ---"
           done
           
-          # Обновляем project.pbxproj
-          echo "Updating project.pbxproj files..."
-          find "$CM_BUILD_DIR/Bsports" -name "project.pbxproj" -type f | while read PBXPROJ; do
-            echo "Found: $PBXPROJ"
-            # Создаем бэкап
-            cp "$PBXPROJ" "${PBXPROJ}.backup"
-            # Обновляем MARKETING_VERSION и CURRENT_PROJECT_VERSION
-            sed -i '' "s/MARKETING_VERSION = [0-9.]*;/MARKETING_VERSION = $NEW_VERSION;/g" "$PBXPROJ" 2>/dev/null || true
-            sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9.]*;/CURRENT_PROJECT_VERSION = $NEW_BUILD;/g" "$PBXPROJ" 2>/dev/null || true
-            echo "  Updated project settings"
+          # 3. ОБНОВЛЯЕМ project.pbxproj (если версия там)
+          echo "=== Checking project.pbxproj ==="
+          find . -name "*.pbxproj" -type f | while read PBXPROJ; do
+            echo "Checking: $PBXPROJ"
+            
+            # Ищем маркетинговую версию
+            if grep -q "MARKETING_VERSION" "$PBXPROJ"; then
+              echo "  Found MARKETING_VERSION in pbxproj"
+              # Создаем backup и обновляем
+              cp "$PBXPROJ" "${PBXPROJ}.backup"
+              sed -i '' "s/MARKETING_VERSION = .*;/MARKETING_VERSION = $NEW_VERSION;/g" "$PBXPROJ" && echo "  ✓ Updated MARKETING_VERSION"
+              sed -i '' "s/CURRENT_PROJECT_VERSION = .*;/CURRENT_PROJECT_VERSION = $NEW_BUILD;/g" "$PBXPROJ" && echo "  ✓ Updated CURRENT_PROJECT_VERSION"
+            fi
+            
+            # Ищем другие паттерны версий
+            grep -n "version" "$PBXPROJ" | head -5 && echo "  Found 'version' patterns"
           done
           
-          # Пробуем использовать agvtool с указанием проекта
-          echo "Trying agvtool with specific project..."
-          cd "$CM_BUILD_DIR/Bsports"
-          if [ -f "Bsports.xcodeproj/project.pbxproj" ]; then
-            # Создаем временный файл с настройками для agvtool
-            echo "Project found, using agvtool..."
-            agvtool new-marketing-version "$NEW_VERSION" -project Bsports.xcodeproj 2>/dev/null || true
-            agvtool new-version -all "$NEW_BUILD" -project Bsports.xcodeproj 2>/dev/null || true
-          fi
+          # 4. ОБНОВЛЯЕМ ЧЕРЕЗ XCODEBUILD С ПРИНУДИТЕЛЬНЫМИ НАСТРОЙКАМИ
+          echo "=== Force update via xcodebuild ==="
+          for CONFIG in Debug Release; do
+            echo "Updating $CONFIG configuration..."
+            xcodebuild \
+              -project "RoadCost.xcodeproj" \
+              -scheme "$XCODE_SCHEME" \
+              -configuration $CONFIG \
+              MARKETING_VERSION="$NEW_VERSION" \
+              CURRENT_PROJECT_VERSION="$NEW_BUILD" \
+              clean 2>&1 | tail -5 || echo "  xcodebuild completed for $CONFIG"
+          done
           
-          echo "=== VERIFICATION ==="
-          # Проверяем финальные значения
-          FIRST_PLIST=$(find "$CM_BUILD_DIR/Bsports" -name "Info.plist" -type f | head -1)
+          # 5. ПРОВЕРКА ЧЕРЕЗ AGVTOOL
+          echo "=== Checking with agvtool ==="
+          agvtool what-marketing-version 2>/dev/null || echo "agvtool not available or failed"
+          agvtool what-version 2>/dev/null || echo "agvtool not available or failed"
+          
+          # Принудительно устанавливаем через agvtool
+          echo "Forcing via agvtool..."
+          agvtool new-marketing-version "$NEW_VERSION" 2>/dev/null || true
+          agvtool new-version -all "$NEW_BUILD" 2>/dev/null || true
+          
+          echo "=== FINAL VERIFICATION ==="
+          echo "1. From first Info.plist:"
+          FIRST_PLIST=$(find . -name "Info.plist" -type f | head -1)
           if [ -f "$FIRST_PLIST" ]; then
-            FINAL_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$FIRST_PLIST" 2>/dev/null)
-            FINAL_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$FIRST_PLIST" 2>/dev/null)
-            echo "Final version in Info.plist: $FINAL_VERSION ($FINAL_BUILD)"
-          else
-            echo "No Info.plist found for verification"
+            echo "File: $(basename "$FIRST_PLIST")"
+            echo "  Version: $(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$FIRST_PLIST" 2>/dev/null || echo 'ERROR')"
+            echo "  Build: $(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$FIRST_PLIST" 2>/dev/null || echo 'ERROR')"
           fi
-      
-      - name: Build IPA
-        script: |
-          cd $CM_BUILD_DIR/Bsports
-          echo "Building IPA with version $NEW_VERSION ($NEW_BUILD)"
-          xcode-project build-ipa \
-            --project "Bsports.xcodeproj" \
-            --scheme "$XCODE_SCHEME"
-      
-      - name: Upload to App Store Connect
-        script: |
-          echo "Загружаем билд в App Store Connect..."
-          IPA_FILE=$(find $CM_BUILD_DIR -name "*.ipa" -type f | head -1)
           
+          echo "2. From xcodebuild settings:"
+          xcodebuild -project "RoadCost.xcodeproj" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -showBuildSettings 2>/dev/null | grep -E "VERSION|BUILD" | head -10 || echo "  No build settings found"
+          
+          echo "=== SUMMARY ==="
+          echo "Expected in final IPA:"
+          echo "  Version: $NEW_VERSION"
+          echo "  Build: $NEW_BUILD"
+      
+      - name: Build and verify IPA
+        script: |
+          echo "=== BUILDING IPA ==="
+          echo "This should create IPA with:"
+          echo "  Version: $NEW_VERSION"
+          echo "  Build: $NEW_BUILD"
+          
+          # Собираем с явным указанием версий
+          xcode-project build-ipa \
+            --project "RoadCost.xcodeproj" \
+            --scheme "$XCODE_SCHEME"
+          
+          # Проверяем что собралось
+          echo "=== CHECKING GENERATED IPA ==="
+          IPA_FILE=$(find build/ios/ipa -name "*.ipa" -type f | head -1)
           if [ -f "$IPA_FILE" ]; then
-            echo "Найден IPA: $IPA_FILE"
-            echo "Размер: $(du -h "$IPA_FILE" | cut -f1)"
+            echo "IPA created: $IPA_FILE"
+            echo "Size: $(du -h "$IPA_FILE" | cut -f1)"
             
-            # Проверяем версию в IPA
+            # Пытаемся получить информацию из IPA
+            echo "Extracting info from IPA..."
             TEMP_DIR=$(mktemp -d)
             unzip -q "$IPA_FILE" -d "$TEMP_DIR" 2>/dev/null || true
-            PLIST=$(find "$TEMP_DIR" -name "Info.plist" -type f | head -1)
-            if [ -f "$PLIST" ]; then
-              VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" 2>/dev/null)
-              BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null)
-              echo "Версия в IPA: $VERSION ($BUILD)"
-            fi
-            rm -rf "$TEMP_DIR"
             
-            # Загружаем
-            app-store-connect publish --path "$IPA_FILE"
+            # Ищем Info.plist в распакованном IPA
+            find "$TEMP_DIR" -name "Info.plist" -type f | while read PLIST; do
+              echo "Found in IPA: $PLIST"
+              echo "  Version: $(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" 2>/dev/null || echo 'ERROR')"
+              echo "  Build: $(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null || echo 'ERROR')"
+            done
+            
+            rm -rf "$TEMP_DIR"
           else
-            echo "ОШИБКА: IPA файл не найден!"
-            find $CM_BUILD_DIR -name "*.ipa" -type f
-            exit 1
+            echo "ERROR: No IPA file found!"
+            find build -type f -name "*.ipa" 2>/dev/null || echo "No IPA files in build directory"
           fi
     
     artifacts:
       - build/ios/ipa/*.ipa
-      - "*.ipa"
+    
     publishing:
       app_store_connect:
         auth: integration
-        submit_to_testflight: true  # Если хотите отправлять в TestFlight сразу
+        submit_to_testflight: true
